@@ -6,5 +6,6 @@ mod reference;
 mod chat;
 mod command;
 mod grammar;
+mod config;
 
 fn main() {}
