@@ -1,2 +1,3 @@
+mod duration;
 
 fn main() {}
