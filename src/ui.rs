@@ -4,6 +4,7 @@ use crate::app::App;
 use crate::config::Theme;
 use crate::rows::{Row, RowKind};
 use crate::grammar::GRAMMAR;
+use crate::intro;
 use crate::model::{plural, Kind, Mark, Status, Thread};
 use chrono::{DateTime, Duration, Local};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -155,10 +156,11 @@ fn title_style(t: &Theme, r: &Row) -> Style {
 
 pub fn draw(f: &mut Frame, app: &App) {
     let filtering = app.filter.is_some();
+    let banner = app.intro.map(|since| since.elapsed());
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
+            Constraint::Length(banner.map(intro::height).unwrap_or(1)),
             Constraint::Length(if filtering { 1 } else { 0 }),
             Constraint::Min(1),
             Constraint::Length(if app.prompt.is_some() { 1 } else { 0 }),
@@ -168,7 +170,10 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // one build per frame: the header counts the same rows the list draws
     let rows = app.rows();
-    header(f, chunks[0], app, &rows);
+    match banner {
+        Some(elapsed) => f.render_widget(Paragraph::new(intro::lines(elapsed, &app.config.theme)), chunks[0]),
+        None => header(f, chunks[0], app, &rows),
+    }
     if filtering {
         filter_line(f, chunks[1], app);
     }

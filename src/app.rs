@@ -11,6 +11,7 @@ use crate::reference::Here;
 use crate::store::{self, Bin};
 use chrono::{DateTime, Local};
 use std::collections::HashSet;
+use std::time::Instant;
 
 pub struct Prompt {
     pub label: String,
@@ -46,6 +47,8 @@ pub struct App {
     pub help: bool,
     pub help_scroll: usize,
     pub note: Option<(bool, String)>,
+    /// When the app opened, while the banner is still playing over the header.
+    pub intro: Option<Instant>,
     fallback: Option<String>,
     signature: u64,
 }
@@ -70,6 +73,7 @@ impl App {
             help: false,
             help_scroll: 0,
             note: None,
+            intro: Some(Instant::now()),
             fallback: None,
             signature: store::signature(),
         };

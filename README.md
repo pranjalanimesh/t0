@@ -48,6 +48,8 @@ t0                        the tree
 | `?` | the key list and the grammar, `j k` to scroll |
 | `q` | quit |
 
+The app opens on its wordmark, which resolves out of static and rolls up into the header in under two seconds. The tree is there underneath from the first frame, and any key cuts the banner short.
+
 Typing happens on one line: prompts open at the bottom, the filter at the top. `ctrl+w` and `ctrl+u` rub out. A command that fails keeps what you typed so you can fix it. The box beside a title is empty until the thread is closed, half-filled once you have done something about it, and filled when it is done. Its colour is white for your move, amber while you are on it, blue while waiting, red past a deadline, grey when closed. A folder takes the loudest state of anything inside it, so a parent cannot look calm while a sub-thread is overdue.
 
 ## One grammar, three doors

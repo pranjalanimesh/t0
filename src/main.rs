@@ -6,6 +6,7 @@ mod duration;
 mod format;
 mod grammar;
 mod input;
+mod intro;
 mod keys;
 mod model;
 mod reference;
@@ -259,11 +260,14 @@ fn loop_app(
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
 
-        if event::poll(StdDuration::from_millis(250))? {
+        // the banner needs frames; the tree only needs to notice the clock
+        let tick = if app.intro.is_some() { 33 } else { 250 };
+        if event::poll(StdDuration::from_millis(tick))? {
             if let Event::Key(k) = event::read()? {
                 if k.kind != KeyEventKind::Press {
                     continue;
                 }
+                app.intro = None;
                 match app.key(k) {
                     Action::Quit => return Ok(()),
                     Action::RunChat { path, args, label, created } => {
@@ -295,6 +299,9 @@ fn loop_app(
         }
 
         app.now = Local::now();
+        if app.intro.is_some_and(|since| intro::over(since.elapsed())) {
+            app.intro = None;
+        }
         app.poll_disk();
         if last_check.elapsed() > StdDuration::from_secs(60) {
             last_check = Instant::now();
