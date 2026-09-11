@@ -9,8 +9,32 @@ use std::path::{Path, PathBuf};
 
 pub const THREAD_FILE: &str = "thread.md";
 pub const CHATS_DIR: &str = "chats";
-/// Deleted threads land here. Dot-prefixed, so the tree walk already skips it.
-pub const ARCHIVE_DIR: &str = ".archive";
+
+/// Threads taken out of the tree land in one of these. Dot-prefixed, so the tree
+/// walk already skips them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Bin {
+    /// Finished with, kept to look back on.
+    Archive,
+    /// Deleted. Stays until purged, so a wrong key can be taken back.
+    Trash,
+}
+
+impl Bin {
+    pub fn word(self) -> &'static str {
+        match self {
+            Bin::Archive => "archive",
+            Bin::Trash => "trash",
+        }
+    }
+
+    fn dir(self) -> PathBuf {
+        root().join(match self {
+            Bin::Archive => ".archive",
+            Bin::Trash => ".trash",
+        })
+    }
+}
 
 /// Folder names a thread may not take, because the store already means something by them.
 fn reserved(name: &str) -> bool {
@@ -204,17 +228,14 @@ pub fn move_dir(from_path: &str, to_parent: &str) -> Result<String> {
     Ok(join_path(to_parent, &name))
 }
 
-fn archive_root() -> PathBuf {
-    root().join(ARCHIVE_DIR)
-}
-
-/// Deleting moves the folder into the archive and remembers where it came from.
-pub fn archive(path: &str, now: chrono::DateTime<chrono::Local>) -> Result<String> {
+/// Moves the folder into a bin and remembers where it came from. Returns the name it
+/// has there, which is the folder name unless that was already taken.
+pub fn stash(path: &str, bin: Bin, now: chrono::DateTime<chrono::Local>) -> Result<String> {
     if path.is_empty() {
-        bail!("refusing to archive the root");
+        bail!("refusing to {} the root", bin.word());
     }
     let from = dir_of(path);
-    let store = archive_root();
+    let store = bin.dir();
     fs::create_dir_all(&store).with_context(|| format!("creating {}", store.display()))?;
     let name = free_name(&store, &from.file_name().unwrap_or_default().to_string_lossy());
     update_meta(&from, |m| {
@@ -222,13 +243,14 @@ pub fn archive(path: &str, now: chrono::DateTime<chrono::Local>) -> Result<Strin
         m.archived = Some(now);
         m.order = None;
     })?;
-    fs::rename(&from, store.join(&name)).with_context(|| format!("archiving {}", from.display()))?;
+    fs::rename(&from, store.join(&name))
+        .with_context(|| format!("moving {} to the {}", from.display(), bin.word()))?;
     Ok(name)
 }
 
-/// Everything in the archive, newest first.
-pub fn read_archive() -> Vec<Thread> {
-    let store = archive_root();
+/// Everything in a bin, newest first.
+pub fn read_bin(bin: Bin) -> Vec<Thread> {
+    let store = bin.dir();
     let Ok(entries) = fs::read_dir(&store) else { return Vec::new() };
     let mut out: Vec<Thread> = entries
         .flatten()
@@ -242,12 +264,22 @@ pub fn read_archive() -> Vec<Thread> {
     out
 }
 
-/// Put an archived thread back where it came from, or at the top if that is gone.
-pub fn restore(name: &str) -> Result<String> {
-    let from = archive_root().join(name);
-    if !from.is_dir() {
-        bail!("no archived thread \"{name}\"");
+/// Which bin holds a thread of this name, the archive first.
+pub fn bin_of(name: &str) -> Option<Bin> {
+    [Bin::Archive, Bin::Trash].into_iter().find(|b| b.dir().join(name).is_dir())
+}
+
+fn binned(bin: Bin, name: &str) -> Result<PathBuf> {
+    let dir = bin.dir().join(name);
+    if !dir.is_dir() {
+        bail!("nothing called \"{name}\" in the {}", bin.word());
     }
+    Ok(dir)
+}
+
+/// Put a thread back where it came from, or at the top if that is gone.
+pub fn restore(bin: Bin, name: &str) -> Result<String> {
+    let from = binned(bin, name)?;
     let file = read_thread_file(&from);
     let came_from = file.meta.from.clone().unwrap_or_default();
     let parent = if came_from.is_empty() || dir_of(&came_from).is_dir() { came_from.clone() } else { String::new() };
@@ -263,12 +295,9 @@ pub fn restore(name: &str) -> Result<String> {
     Ok(join_path(&parent, &to_name))
 }
 
-/// Really gone, from the archive only.
-pub fn purge(name: &str) -> Result<()> {
-    let dir = archive_root().join(name);
-    if !dir.is_dir() {
-        bail!("no archived thread \"{name}\"");
-    }
+/// Really gone. Only a bin can be purged from.
+pub fn purge(bin: Bin, name: &str) -> Result<()> {
+    let dir = binned(bin, name)?;
     fs::remove_dir_all(&dir).with_context(|| format!("deleting {}", dir.display()))?;
     Ok(())
 }

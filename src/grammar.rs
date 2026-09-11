@@ -19,9 +19,10 @@ pub const GRAMMAR: &[&str] = &[
     "rename <thread>: <title>",
     "move <thread> under <parent> | top | up | down",
     "<thread> wait +1d | -2h            push a deadline out or pull it in",
-    "delete <thread> | delete <thread> #3",
+    "archive <thread>                   put away, A to look",
+    "delete <thread> | delete <thread> #3   into the trash, T to look",
     "mark <thread> [#3] yellow | green | pink | blue | off",
-    "restore <thread> | purge <thread>  out of the archive, or gone for good",
+    "restore <thread> | purge <thread>  out of a bin, or gone for good",
 ];
 
 /// The last ", wait" that opens a trailing clause: any case, any spacing after the
@@ -144,10 +145,13 @@ pub fn parse(line: &str) -> Result<Cmd> {
         return Ok(Cmd::Reorder { thread: c[1].trim().into(), delta: 1 });
     }
     if let Some(c) = re(r"^restore\s+(.+)$").captures(s) {
-        return Ok(Cmd::Restore { name: c[1].trim().into() });
+        return Ok(Cmd::Restore { bin: None, name: c[1].trim().into() });
     }
     if let Some(c) = re(r"^purge\s+(.+)$").captures(s) {
-        return Ok(Cmd::Purge { name: c[1].trim().into() });
+        return Ok(Cmd::Purge { bin: None, name: c[1].trim().into() });
+    }
+    if let Some(c) = re(r"^archive\s+(.+)$").captures(s) {
+        return Ok(Cmd::Archive { thread: c[1].trim().into() });
     }
     if let Some(c) = re(r"^move\s+(.+?)\s+under\s+(.+)$").captures(s) {
         return Ok(Cmd::Move { thread: c[1].trim().into(), parent: Some(c[2].trim().into()) });

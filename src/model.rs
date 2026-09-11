@@ -106,8 +106,9 @@ impl Event {
 pub struct Meta {
     /// Where this thread sits among its siblings once you have moved it by hand.
     pub order: Option<u32>,
-    /// Archived threads only: the path they came from, so they can go back.
+    /// Threads in a bin only: the path they came from, so they can go back.
     pub from: Option<String>,
+    /// When it went into the archive or the trash.
     pub archived: Option<DateTime<Local>>,
     pub mark: Option<Mark>,
 }

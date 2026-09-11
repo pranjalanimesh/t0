@@ -7,7 +7,8 @@ use crate::grammar;
 use crate::input::Input;
 use crate::model::{parent_path, plural, Mark, Thread};
 use crate::rows::{Row, RowKind};
-use crate::{chat, store};
+use crate::store::{self, Bin};
+use crate::chat;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// What a prompt is collecting, and so what command its answer becomes.
@@ -20,6 +21,8 @@ pub enum PromptKind {
     Rename { path: String },
     EditEvent { path: String, index: usize },
     Chat { path: String },
+    /// A command that only goes through once `word` has been typed out.
+    Confirm { word: &'static str, cmd: Cmd },
 }
 
 /// What the main loop must do after a key, when the app cannot do it itself.
@@ -134,6 +137,12 @@ impl App {
                 Cmd::Edit { thread: path.clone(), index: *index, text: value.to_string() }
             }
             PromptKind::Chat { path } => Cmd::Chat { thread: path.clone(), title: value.to_string() },
+            PromptKind::Confirm { word, cmd } => {
+                if value != *word {
+                    anyhow::bail!("type {word} to go through with it, esc to keep it");
+                }
+                cmd.clone()
+            }
         })
     }
 
@@ -170,10 +179,6 @@ impl App {
         let i = self.index(&rows);
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
 
-        if !matches!(k.code, KeyCode::Char('x')) {
-            self.armed = None;
-        }
-
         let move_to = |app: &mut App, j: usize| {
             if let Some(r) = rows.get(j.min(rows.len().saturating_sub(1))) {
                 app.cursor = Some(r.key.clone());
@@ -201,16 +206,9 @@ impl App {
                 self.view = if c == 'V' { self.view.prev() } else { self.view.next() };
                 self.say(true, format!("view: {}", self.view.name()));
             }
-            KeyCode::Char('A') => {
-                self.in_archive = !self.in_archive;
-                if self.in_archive {
-                    self.archive = store::read_archive();
-                    self.say(true, "archive · enter restores · x x purges · A back");
-                } else {
-                    self.say(true, "back to the tree");
-                }
-                self.cursor = self.top_row();
-            }
+            KeyCode::Char('A') => self.look_in(Bin::Archive, 'A'),
+            KeyCode::Char('T') => self.look_in(Bin::Trash, 'T'),
+            KeyCode::Char('u') => self.undo(),
             KeyCode::Char('K') => self.shuffle(&rows, i, -1),
             KeyCode::Char('J') => self.shuffle(&rows, i, 1),
             KeyCode::Char('/') => {
@@ -280,7 +278,7 @@ impl App {
                 }
                 self.ask(label, hint, "", kind);
             }
-            KeyCode::Char('r') if self.in_archive => return self.restore(rows.get(i)),
+            KeyCode::Char('r') if self.bin.is_some() => return self.restore(rows.get(i)),
             // swipe the highlighter again for the next pen, once more to take it off
             KeyCode::Char('m') => {
                 let Some(r) = rows.get(i) else { return Action::None };
@@ -293,7 +291,8 @@ impl App {
                 return self.run_cmd(cmd);
             }
             KeyCode::Enter => return self.enter(rows.get(i)),
-            KeyCode::Char('x') => return self.delete(rows.get(i)),
+            KeyCode::Char('x') => return self.remove(rows.get(i)),
+            KeyCode::Char('X') => self.destroy(rows.get(i)),
             KeyCode::Tab => self.indent(&rows, i),
             KeyCode::BackTab => self.outdent(&rows, i),
             _ => {}
@@ -301,11 +300,24 @@ impl App {
         Action::None
     }
 
+    /// A and T open a bin, and the same key closes it again.
+    fn look_in(&mut self, bin: Bin, key: char) {
+        if self.bin == Some(bin) {
+            self.bin = None;
+            self.say(true, "back to the tree");
+        } else {
+            self.bin = Some(bin);
+            self.binned = store::read_bin(bin);
+            self.say(true, format!("{} · enter restores · X purges · {key} back", bin.word()));
+        }
+        self.cursor = self.top_row();
+    }
+
     /// Move a thread past the sibling above or below it.
     fn shuffle(&mut self, rows: &[Row], i: usize, delta: i32) {
         let Some(row) = rows.get(i) else { return };
-        if self.in_archive {
-            self.say(false, "the archive is ordered by when things were archived");
+        if let Some(bin) = self.bin {
+            self.say(false, format!("the {} is ordered by when things landed in it", bin.word()));
             return;
         }
         if !matches!(row.kind, RowKind::Thread { .. }) {
@@ -315,14 +327,14 @@ impl App {
         self.run_cmd(Cmd::Reorder { thread: row.path.clone(), delta });
     }
 
-    /// Archived threads go back whole: their pieces are not separately restorable.
+    /// Binned threads go back whole: their pieces are not separately restorable.
     fn restore(&mut self, row: Option<&Row>) -> Action {
         let Some(row) = row else { return Action::None };
         if row.depth > 0 {
             self.say(false, "restore the whole thread, not a piece of it");
             return Action::None;
         }
-        self.run_cmd(Cmd::Restore { name: row.path.clone() })
+        self.run_cmd(Cmd::Restore { bin: self.bin, name: row.path.clone() })
     }
 
     fn title_of(&self, path: &str) -> String {
@@ -331,7 +343,7 @@ impl App {
 
     fn enter(&mut self, row: Option<&Row>) -> Action {
         let Some(row) = row else { return Action::None };
-        if self.in_archive {
+        if self.bin.is_some() {
             return self.restore(Some(row));
         }
         let (path, title) = (row.path.clone(), row.title.clone());
@@ -357,34 +369,50 @@ impl App {
         Action::None
     }
 
-    /// x asks, and a second x on the same row goes through with it.
-    fn delete(&mut self, row: Option<&Row>) -> Action {
+    /// x: archive a thread, or delete an event or a chat. No question asked, because
+    /// u takes any of it back.
+    fn remove(&mut self, row: Option<&Row>) -> Action {
         let Some(row) = row else { return Action::None };
         let thread = row.path.clone();
-        let title = &row.title;
-        let (what, cmd) = match (self.in_archive, &row.kind) {
-            (true, _) if row.depth > 0 => {
-                self.say(false, "purge the whole thread, not a piece of it");
-                return Action::None;
-            }
-            (true, _) => (format!("purge \"{title}\" for good"), Cmd::Purge { name: thread }),
-            (false, RowKind::Thread { .. }) => {
-                (format!("archive \"{title}\"{}", self.inside_note(&thread)), Cmd::Delete { thread, index: None })
-            }
-            (false, RowKind::Event { index, .. }) => {
-                (format!("delete #{index} \"{title}\""), Cmd::Delete { thread, index: Some(*index) })
-            }
-            (false, RowKind::Chat { file, .. }) => {
-                (format!("delete the chat \"{title}\""), Cmd::DeleteChat { thread, file: file.clone() })
-            }
-        };
-        if self.armed.as_deref() != Some(row.key.as_str()) {
-            self.armed = Some(row.key.clone());
-            self.say(false, format!("{what}? press x again"));
+        if self.bin.is_some() {
+            self.say(false, "X purges, and asks you to type it out");
             return Action::None;
         }
-        self.armed = None;
-        self.run_cmd(cmd)
+        let cmd = match &row.kind {
+            RowKind::Thread { .. } => Cmd::Archive { thread },
+            RowKind::Event { index, .. } => Cmd::Delete { thread, index: Some(*index) },
+            RowKind::Chat { file, .. } => Cmd::DeleteChat { thread, file: file.clone() },
+        };
+        let action = self.run_cmd(cmd);
+        if let Some((true, text)) = &mut self.note {
+            text.push_str(" · u to undo");
+        }
+        action
+    }
+
+    /// X: delete a thread into the trash, or purge one out of a bin for good. Both
+    /// make you type the word, so neither can happen by leaning on a key.
+    fn destroy(&mut self, row: Option<&Row>) {
+        let Some(row) = row else { return };
+        let thread = row.path.clone();
+        let title = &row.title;
+        if let Some(bin) = self.bin {
+            if row.depth > 0 {
+                self.say(false, "purge the whole thread, not a piece of it");
+                return;
+            }
+            let label = format!("purge \"{title}\" from the {} for good", bin.word());
+            let cmd = Cmd::Purge { bin: Some(bin), name: thread };
+            self.ask(label, "type purge · there is no undo", "", PromptKind::Confirm { word: "purge", cmd });
+            return;
+        }
+        if !matches!(row.kind, RowKind::Thread { .. }) {
+            self.say(false, "x deletes an event or a chat; X is for a whole thread");
+            return;
+        }
+        let label = format!("delete \"{title}\"{}", self.inside_note(&thread));
+        let cmd = Cmd::Delete { thread, index: None };
+        self.ask(label, "type delete · it goes to the trash, T to look, u to undo", "", PromptKind::Confirm { word: "delete", cmd });
     }
 
     /// " and 2 threads + 1 chat inside", or nothing when it is a leaf.

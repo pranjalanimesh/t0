@@ -38,8 +38,10 @@ t0                        the tree
 | `tab` / `shift+tab` | move under the thread above / out one level |
 | `J` / `K` | move down or up among its siblings, also `shift+↓ ↑` |
 | `v` / `V` | next or previous view |
-| `A` | the archive |
-| `x x` | archive, pressed twice |
+| `x` | archive a thread; on an event or a chat, delete it |
+| `X` | delete a thread into the trash, after typing `delete` |
+| `u` | undo the last command, then the one before |
+| `A` / `T` | the archive / the trash |
 | `/` | filter |
 | `:` | type a command |
 | `g` / `G` | first / last |
@@ -62,13 +64,14 @@ edit <thread> #3: <text>
 rename <thread>: <title>
 move <thread> under <parent> | top | up | down
 <thread> wait +1d | -2h
+archive <thread>
 delete <thread> | delete <thread> #3
 restore <thread> | purge <thread>
 ```
 
 Threads sit oldest first until you move one with `J` or `K`, after which that level keeps the order you gave it. The position is stored in an HTML comment in `thread.md`, invisible when the file is rendered.
 
-A thread is a path like `infra/aws`, a folder name, or a title when it is unique, and path segments may be titles. Inside a thread's folder, `.` means that thread and `./x` means one inside it. `w` on a thread that is already waiting takes `+2h` to push the deadline out or `-30m` to pull it in, and will not pull it back before the wait began. Durations read as `30m`, `2h`, `1 day`, `2 weeks`, up to ten years. A bare `wait` waits with no deadline and never fires. Text that merely ends in "wait for their reply" stays text; a `, wait` clause only becomes a deadline when what follows is a duration. `#3` is the event's place in the log. Any event on a closed thread reopens it. Deleting a thread deletes its folder and everything under it.
+A thread is a path like `infra/aws`, a folder name, or a title when it is unique, and path segments may be titles. Inside a thread's folder, `.` means that thread and `./x` means one inside it. `w` on a thread that is already waiting takes `+2h` to push the deadline out or `-30m` to pull it in, and will not pull it back before the wait began. Durations read as `30m`, `2h`, `1 day`, `2 weeks`, up to ten years. A bare `wait` waits with no deadline and never fires. Text that merely ends in "wait for their reply" stays text; a `, wait` clause only becomes a deadline when what follows is a duration. `#3` is the event's place in the log. Any event on a closed thread reopens it. Archiving or deleting a thread takes its folder and everything under it along.
 
 Other commands: `t0 status [thread]`, `t0 check`, `t0 chat <thread>[: title]`, `t0 chats <thread>`, `t0 resume <thread> <file>`, `t0 help`.
 
@@ -78,11 +81,11 @@ Other commands: `t0 status [thread]`, `t0 check`, `t0 chat <thread>[: title]`, `
 
 A thread that has not moved in three weeks, and has nothing moving under it, goes cold and leaves the current view. Nothing is deleted and nothing asks you anything: a page you have stopped writing on turns itself. `cools_after` in the config sets the span, and `t0 cold` prints them. `m` swipes a highlighter over the line under the cursor, again for the next pen, once more to take it off; it keeps as `mark=` in the file.
 
-## The archive
+## The archive, the trash, and undo
 
-`x x` moves a thread and everything inside it into `~/.t0/.archive`, it does not erase it. `A` opens the archive, newest first. There, `enter` or `r` puts a thread back where it came from, and `x x` purges it for good. `A` again returns to the tree. From a shell: `t0 "delete <thread>"`, `t0 "restore <thread>"`, `t0 "purge <thread>"`.
+Nothing leaves `~/.t0` until you purge it. `x` moves a thread and everything inside it into `.archive`: finished with, kept to look back on. It does not ask, because `u` takes it back. `X` moves it into `.trash` instead, and makes you type `delete` first, because a wrong `x` costs one keypress and a wrong `X` should not happen at all. `A` opens the archive and `T` the trash, newest first. In either, `enter` or `r` puts a thread back where it came from, and `X` purges it for good after you type `purge`. The same key returns to the tree. From a shell: `t0 "archive <thread>"`, `t0 "delete <thread>"`, `t0 "restore <thread>"`, `t0 "purge <thread>"`.
 
-Deleting a single event with `delete <thread> #3` is not archived. It is one line, and the file is text you can undo by hand.
+`u` takes the last command back, then the one before, up to fifty deep. An event added, edited or deleted goes back to the old text; an archive, delete or restore goes back to where it was; a move goes back under its old parent; a new thread goes into the trash. A purge and a chat cannot be undone. Undo only touches what the command wrote: if a chat or the CLI has changed that file since, `u` says so and leaves it alone. The stack lives in memory, so it is empty when the app starts.
 
 ## Deadlines
 

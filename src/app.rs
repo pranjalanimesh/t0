@@ -2,13 +2,13 @@
 //! changes both. Rows live in `rows`, keys in `keys`.
 
 use crate::chat;
-use crate::command::{self, Cmd, Effect};
+use crate::command::{self, Cmd, Effect, Step};
 use crate::config::{self, Config};
 use crate::input::Input;
 use crate::keys::{Action, PromptKind};
 use crate::model::{find, parent_path, Thread, View};
 use crate::reference::Here;
-use crate::store;
+use crate::store::{self, Bin};
 use chrono::{DateTime, Local};
 use std::collections::HashSet;
 
@@ -19,13 +19,24 @@ pub struct Prompt {
     pub kind: PromptKind,
 }
 
+/// A command that can still be taken back: what it said, and how.
+pub struct Undoable {
+    pub what: String,
+    pub steps: Vec<Step>,
+}
+
+/// How many commands `u` can walk back through.
+const UNDO_DEPTH: usize = 50;
+
 pub struct App {
     pub tree: Vec<Thread>,
     /// Colours, read once at startup.
     pub config: Config,
-    /// What is in the archive, read only while you are looking at it.
-    pub archive: Vec<Thread>,
-    pub in_archive: bool,
+    /// The bin you are looking at, if any, and what is in it. Read only while it is open.
+    pub bin: Option<Bin>,
+    pub binned: Vec<Thread>,
+    /// Newest last. In memory only: undo is for the key you just pressed.
+    pub undo: Vec<Undoable>,
     pub view: View,
     pub now: DateTime<Local>,
     pub expanded: HashSet<String>,
@@ -35,7 +46,6 @@ pub struct App {
     pub help: bool,
     pub help_scroll: usize,
     pub note: Option<(bool, String)>,
-    pub armed: Option<String>,
     fallback: Option<String>,
     signature: u64,
 }
@@ -48,8 +58,9 @@ impl App {
         let mut app = App {
             tree: store::read_tree()?,
             config: config::load(),
-            archive: Vec::new(),
-            in_archive: false,
+            bin: None,
+            binned: Vec::new(),
+            undo: Vec::new(),
             view: View::Current,
             now: Local::now(),
             expanded: HashSet::new(),
@@ -59,7 +70,6 @@ impl App {
             help: false,
             help_scroll: 0,
             note: None,
-            armed: None,
             fallback: None,
             signature: store::signature(),
         };
@@ -109,8 +119,8 @@ impl App {
         if let Ok(tree) = store::read_tree() {
             self.tree = tree;
         }
-        if self.in_archive {
-            self.archive = store::read_archive();
+        if let Some(bin) = self.bin {
+            self.binned = store::read_bin(bin);
         }
         // after the read, so a change made while reading is not missed
         self.signature = store::signature();
@@ -152,6 +162,12 @@ impl App {
                 return Action::None;
             }
         };
+        if !outcome.undo.is_empty() {
+            self.undo.push(Undoable { what: outcome.message.clone(), steps: outcome.undo });
+            if self.undo.len() > UNDO_DEPTH {
+                self.undo.remove(0);
+            }
+        }
         let action = match outcome.effect {
             Effect::None => Action::None,
             // a fresh thread is where you want to be next
@@ -172,6 +188,20 @@ impl App {
         self.say(true, outcome.message);
         self.reload();
         action
+    }
+
+    /// u: take the last command back. Whatever the undo did is not itself undoable,
+    /// so u u does not put things back the way they were.
+    pub(crate) fn undo(&mut self) {
+        let Some(last) = self.undo.pop() else {
+            self.say(false, "nothing to undo");
+            return;
+        };
+        match command::revert(&last.steps, Local::now()) {
+            Ok(()) => self.say(true, format!("undid: {}", last.what)),
+            Err(e) => self.say(false, format!("could not undo \"{}\": {e:#}", last.what)),
+        }
+        self.reload();
     }
 
     /// Put the cursor on a row, opening whatever it sits inside.

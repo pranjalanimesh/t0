@@ -13,7 +13,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const HINT: &str = "n new  a event  w wait  d done  c chat  J K move  v view  A archive  x x delete  ? keys";
+const HINT: &str = "n new  a event  w wait  d done  c chat  v view  x archive  X delete  u undo  A T bins  ? keys";
 
 /// Columns on screen, not bytes or characters: a CJK title is twice as wide.
 pub fn width(s: &str) -> usize {
@@ -186,9 +186,9 @@ fn header(f: &mut Frame, area: Rect, app: &App, rows: &[Row]) {
     let t = &app.config.theme;
     let (open, overdue) = App::counts(rows);
     let mut spans = vec![Span::styled("t0", Style::default().fg(t.ink).add_modifier(Modifier::BOLD)), Span::raw("  ")];
-    if app.in_archive {
-        spans.push(Span::styled("archive", Style::default().fg(t.action).add_modifier(Modifier::BOLD)));
-        let n = app.archive.len();
+    if let Some(bin) = app.bin {
+        spans.push(Span::styled(bin.word(), Style::default().fg(t.action).add_modifier(Modifier::BOLD)));
+        let n = app.binned.len();
         spans.push(Span::styled(format!("  {n} thread{}", plural(n)), Style::default().fg(t.muted)));
     } else {
         if app.view != crate::model::View::Current {
@@ -361,8 +361,10 @@ const KEYS: &[(&str, &str)] = &[
     ("tab / shift+tab", "move under the thread above / out one level"),
     ("J / K", "move down / up among its siblings (also shift+↓ ↑)"),
     ("v / V", "next / previous view: current, open, my move, doing, waiting, overdue, closed, cold"),
-    ("A", "the archive: enter or r restores, x x purges, A comes back"),
-    ("x x", "archive, pressed twice"),
+    ("x", "archive a thread; on an event or a chat, delete it. u takes it back"),
+    ("X", "delete a thread into the trash; asks you to type delete"),
+    ("u", "undo the last command, then the one before"),
+    ("A / T", "the archive / the trash: enter or r restores, X purges, same key comes back"),
     ("m", "highlighter: swipe again for the next pen, once more to take it off"),
     (",", "edit the config in $EDITOR; colours apply as soon as you save"),
     ("/", "filter"),

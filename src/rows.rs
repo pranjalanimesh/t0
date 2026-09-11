@@ -42,8 +42,8 @@ impl App {
     }
 
     pub fn source(&self) -> &[Thread] {
-        if self.in_archive {
-            &self.archive
+        if self.bin.is_some() {
+            &self.binned
         } else {
             &self.tree
         }
@@ -82,11 +82,11 @@ impl App {
         if !q.is_empty() && !App::any_match(t, q) {
             return;
         }
-        if !self.in_archive && !self.in_view(t) {
+        if self.bin.is_none() && !self.in_view(t) {
             return;
         }
         // a filter searches everything, so it reaches what has gone cold too
-        if !self.in_archive && q.is_empty() && !self.is_current(t) {
+        if self.bin.is_none() && q.is_empty() && !self.is_current(t) {
             return;
         }
         let open = self.expanded.contains(&t.path);

@@ -1,13 +1,15 @@
-//! What a command *does*. One grammar, two doors: the keys in the app and the CLI
-//! both build a `Cmd` and send it here.
+//! What a command *does*, and how to take it back. One grammar, two doors: the keys
+//! in the app and the CLI both build a `Cmd` and send it here.
 
 use crate::duration;
-use crate::format::ThreadFile;
+use crate::format::{serialize_thread, ThreadFile};
 use crate::model::{join_path, walk_all, Event, Kind, Mark, Status, Thread};
 use crate::reference::{resolve, Here};
-use crate::store;
+use crate::store::{self, Bin};
 use anyhow::{bail, Result};
 use chrono::{DateTime, Local};
+use std::fs;
+use std::path::PathBuf;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Wait {
@@ -32,18 +34,30 @@ pub enum Effect {
     Chat { path: String, file: String, session: String, title: String },
 }
 
+/// One thing to put back. A command records these as it goes, so `u` can take it
+/// back later without the app having to know what each command did.
+pub enum Step {
+    /// A file this command rewrote or removed. `after` is what it left behind, and
+    /// the old bytes only go back if that is still what is there.
+    File { path: PathBuf, before: Option<String>, after: Option<String> },
+    /// A command whose opposite is another command: a move back, a restore.
+    Cmd(Cmd),
+}
+
 pub struct Outcome {
     pub message: String,
     pub effect: Effect,
+    /// Empty when there is nothing to take back: a purge, a chat that was launched.
+    pub undo: Vec<Step>,
 }
 
 impl From<String> for Outcome {
     fn from(message: String) -> Outcome {
-        Outcome { message, effect: Effect::None }
+        Outcome { message, effect: Effect::None, undo: Vec::new() }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Cmd {
     New { parent: Option<String>, title: String, text: Option<String>, wait: Wait },
     Event { thread: String, text: String, wait: Wait },
@@ -56,14 +70,18 @@ pub enum Cmd {
     Reorder { thread: String, delta: i32 },
     /// Push an existing deadline out or pull it in.
     Snooze { thread: String, by: chrono::Duration },
+    /// A thread goes into the archive. It comes back with `restore`.
+    Archive { thread: String },
+    /// A thread goes into the trash; an event line is just gone. Both undo.
     Delete { thread: String, index: Option<usize> },
     /// Swipe a highlighter over a thread's title, or over one of its events.
     Mark { thread: String, index: Option<usize>, mark: Option<Mark> },
     /// Write a new chat file, ready for the caller to launch.
     Chat { thread: String, title: String },
     DeleteChat { thread: String, file: String },
-    Restore { name: String },
-    Purge { name: String },
+    /// No bin means look in both, the archive first.
+    Restore { bin: Option<Bin>, name: String },
+    Purge { bin: Option<Bin>, name: String },
 }
 
 fn push_wait(events: &mut Vec<Event>, wait: Wait, now: DateTime<Local>) -> String {
@@ -93,7 +111,7 @@ fn save(t: &Thread, file: &ThreadFile) -> Result<()> {
 }
 
 /// Resolve a reference, read its file, change it, write it back. Nothing is written
-/// if the change fails.
+/// if the change fails. The old bytes are kept so the change can be undone.
 fn edit(
     tree: &[Thread],
     reference: &str,
@@ -101,10 +119,37 @@ fn edit(
     change: impl FnOnce(&Thread, &mut ThreadFile) -> Result<String>,
 ) -> Result<Outcome> {
     let t = resolve(tree, reference, here)?;
+    let path = store::dir_of(&t.path).join(store::THREAD_FILE);
+    let before = fs::read_to_string(&path).ok();
     let mut file = load(t);
     let message = change(t, &mut file)?;
     save(t, &file)?;
-    Ok(message.into())
+    let step = Step::File { path, before, after: Some(serialize_thread(&file)) };
+    Ok(Outcome { message, effect: Effect::None, undo: vec![step] })
+}
+
+/// Take a thread out of the tree into a bin. It comes back with `restore`, or `u`.
+fn stash(tree: &[Thread], reference: &str, here: &Here, bin: Bin, now: DateTime<Local>) -> Result<Outcome> {
+    let t = resolve(tree, reference, here)?;
+    let inside = t.count() - 1;
+    let path = t.path.clone();
+    let name = store::stash(&path, bin, now)?;
+    let note = if inside > 0 { format!(" and {inside} inside it") } else { String::new() };
+    let verb = match bin {
+        Bin::Archive => "archived",
+        Bin::Trash => "deleted",
+    };
+    Ok(Outcome {
+        message: format!("{verb} {path}{note}"),
+        effect: Effect::None,
+        undo: vec![Step::Cmd(Cmd::Restore { bin: Some(bin), name })],
+    })
+}
+
+/// The bin a name was given, or the one that holds it.
+fn bin_holding(bin: Option<Bin>, name: &str) -> Result<Bin> {
+    bin.or_else(|| store::bin_of(name))
+        .ok_or_else(|| anyhow::anyhow!("nothing called \"{name}\" in the archive or the trash"))
 }
 
 fn no_such_event(path: &str, n: usize, index: usize) -> anyhow::Error {
@@ -152,7 +197,12 @@ fn run(cmd: Cmd, tree: &[Thread], now: DateTime<Local>, here: &Here) -> Result<O
             let file = ThreadFile { title, meta: Default::default(), events, notes: String::new() };
             store::write_thread_file(&parent_dir.join(&name), &file)?;
             let path = join_path(&parent_path, &name);
-            Ok(Outcome { message: format!("new {path}"), effect: Effect::Created(path) })
+            Ok(Outcome {
+                message: format!("new {path}"),
+                effect: Effect::Created(path.clone()),
+                // fresh, but not nothing: it goes to the trash rather than away
+                undo: vec![Step::Cmd(Cmd::Delete { thread: path, index: None })],
+            })
         }
         Cmd::Event { thread, text, wait } => edit(tree, &thread, here, |t, file| {
             let reopened = t.status(now) == Status::Closed;
@@ -228,17 +278,20 @@ fn run(cmd: Cmd, tree: &[Thread], now: DateTime<Local>, here: &Here) -> Result<O
             if to == from {
                 return Ok(format!("{from} is already there").into());
             }
-            Ok(Outcome { message: format!("moved {from} to {to}"), effect: Effect::Moved(to) })
+            let back = Cmd::Move {
+                thread: to.clone(),
+                parent: Some(crate::model::parent_path(&from).to_string()).filter(|p| !p.is_empty()),
+            };
+            Ok(Outcome { message: format!("moved {from} to {to}"), effect: Effect::Moved(to), undo: vec![Step::Cmd(back)] })
         }
         Cmd::Reorder { thread, delta } => {
             let t = resolve(tree, &thread, here)?;
             let way = if delta < 0 { "up" } else { "down" };
-            Ok(if store::reorder(&t.path, delta)? {
-                format!("moved {} {way}", t.path)
-            } else {
-                format!("{} is already at the {}", t.path, if delta < 0 { "top" } else { "bottom" })
+            if !store::reorder(&t.path, delta)? {
+                return Ok(format!("{} is already at the {}", t.path, if delta < 0 { "top" } else { "bottom" }).into());
             }
-            .into())
+            let back = Cmd::Reorder { thread: t.path.clone(), delta: -delta };
+            Ok(Outcome { message: format!("moved {} {way}", t.path), effect: Effect::None, undo: vec![Step::Cmd(back)] })
         }
         Cmd::Snooze { thread, by } => edit(tree, &thread, here, |t, file| {
             let last = file.events.last_mut().filter(|e| e.kind == Kind::Wait);
@@ -259,12 +312,16 @@ fn run(cmd: Cmd, tree: &[Thread], now: DateTime<Local>, here: &Here) -> Result<O
             Ok(Outcome {
                 message: format!("{path}/{}/{}", store::CHATS_DIR, c.file),
                 effect: Effect::Chat { path, file: c.file, session: c.session, title: c.title },
+                undo: Vec::new(),
             })
         }
         Cmd::DeleteChat { thread, file } => {
             let t = resolve(tree, &thread, here)?;
+            let path = store::dir_of(&t.path).join(store::CHATS_DIR).join(&file);
+            let before = fs::read_to_string(&path).ok();
             store::remove_chat(&t.path, &file)?;
-            Ok(format!("deleted chat {file}").into())
+            let step = Step::File { path, before, after: None };
+            Ok(Outcome { message: format!("deleted chat {file}"), effect: Effect::None, undo: vec![step] })
         }
         Cmd::Mark { thread, index, mark } => edit(tree, &thread, here, |t, file| {
             let what = match index {
@@ -284,19 +341,28 @@ fn run(cmd: Cmd, tree: &[Thread], now: DateTime<Local>, here: &Here) -> Result<O
                 None => format!("{}: {what} unhighlighted", t.path),
             })
         }),
-        Cmd::Restore { name } => Ok(format!("restored {}", store::restore(&name)?).into()),
-        Cmd::Purge { name } => {
-            store::purge(&name)?;
-            Ok(format!("purged {name}").into())
+        Cmd::Restore { bin, name } => {
+            let bin = bin_holding(bin, &name)?;
+            let path = store::restore(bin, &name)?;
+            let back = match bin {
+                Bin::Archive => Cmd::Archive { thread: path.clone() },
+                Bin::Trash => Cmd::Delete { thread: path.clone(), index: None },
+            };
+            Ok(Outcome {
+                message: format!("restored {path} from the {}", bin.word()),
+                effect: Effect::None,
+                undo: vec![Step::Cmd(back)],
+            })
         }
+        Cmd::Purge { bin, name } => {
+            let bin = bin_holding(bin, &name)?;
+            store::purge(bin, &name)?;
+            Ok(format!("purged {name}, gone for good").into())
+        }
+        Cmd::Archive { thread } => stash(tree, &thread, here, Bin::Archive, now),
         Cmd::Delete { thread, index } => {
-            let t = resolve(tree, &thread, here)?;
             let Some(index) = index else {
-                let inside = t.count() - 1;
-                let path = t.path.clone();
-                store::archive(&path, now)?;
-                let note = if inside > 0 { format!(" and {inside} inside it") } else { String::new() };
-                return Ok(format!("archived {path}{note}").into());
+                return stash(tree, &thread, here, Bin::Trash, now);
             };
             edit(tree, &thread, here, |t, file| {
                 let n = file.events.len();
@@ -314,6 +380,29 @@ fn run(cmd: Cmd, tree: &[Thread], now: DateTime<Local>, here: &Here) -> Result<O
             })
         }
     }
+}
+
+/// Take a command back, last step first. A file only goes back if it still holds
+/// what the command wrote, so an edit made since by a chat or the CLI is kept.
+pub fn revert(steps: &[Step], now: DateTime<Local>) -> Result<()> {
+    for step in steps.iter().rev() {
+        match step {
+            Step::File { path, before, after } => {
+                if fs::read_to_string(path).ok() != *after {
+                    let shown = path.strip_prefix(store::root()).unwrap_or(path);
+                    bail!("{} changed since, left as it is", shown.display());
+                }
+                match before {
+                    Some(text) => fs::write(path, text)?,
+                    None => fs::remove_file(path)?,
+                }
+            }
+            Step::Cmd(cmd) => {
+                apply_cmd(cmd.clone(), now, &Here::default())?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Marks passed deadlines once. Returns one line per thread that just crossed its due.
@@ -342,3 +431,68 @@ pub fn check_timers(now: DateTime<Local>) -> Result<Vec<String>> {
 }
 
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One test, because T0_ROOT is process-wide and tests run in parallel.
+    #[test]
+    fn undo_puts_things_back() {
+        let root = std::env::temp_dir().join(format!("t0-undo-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("T0_ROOT", &root);
+        store::ensure_root().unwrap();
+        let now = Local::now();
+        let here = Here::default();
+        let text = |t: &str| fs::read_to_string(root.join(t).join(store::THREAD_FILE)).ok();
+
+        // an event: the file goes back to its old bytes
+        apply("new alpha: first", now, &here).unwrap();
+        let before = text("alpha");
+        let o = apply("alpha: second", now, &here).unwrap();
+        assert_ne!(text("alpha"), before);
+        revert(&o.undo, now).unwrap();
+        assert_eq!(text("alpha"), before);
+
+        // an event, then someone else edits the file: undo refuses, the edit stays
+        let o = apply("alpha: third", now, &here).unwrap();
+        fs::write(root.join("alpha").join(store::THREAD_FILE), "# alpha\n\nhand edited\n").unwrap();
+        assert!(revert(&o.undo, now).is_err());
+        assert_eq!(text("alpha").unwrap(), "# alpha\n\nhand edited\n");
+
+        // archive and delete both come back, into the same place
+        let o = apply("archive alpha", now, &here).unwrap();
+        assert!(text("alpha").is_none());
+        revert(&o.undo, now).unwrap();
+        assert!(text("alpha").is_some());
+        let o = apply("delete alpha", now, &here).unwrap();
+        assert!(root.join(".trash/alpha").is_dir());
+        revert(&o.undo, now).unwrap();
+        assert!(text("alpha").is_some() && !root.join(".trash/alpha").exists());
+
+        // a restore undoes back into the bin it came from
+        apply("delete alpha", now, &here).unwrap();
+        let o = apply("restore alpha", now, &here).unwrap();
+        revert(&o.undo, now).unwrap();
+        assert!(root.join(".trash/alpha").is_dir());
+        apply("restore alpha", now, &here).unwrap();
+
+        // new undoes into the trash, not into nothing
+        let o = apply("new beta: b", now, &here).unwrap();
+        revert(&o.undo, now).unwrap();
+        assert!(root.join(".trash/beta").is_dir());
+
+        // a move goes back under its old parent
+        apply("new alpha/inner: i", now, &here).unwrap();
+        let o = apply("move inner top", now, &here).unwrap();
+        assert!(text("inner").is_some());
+        revert(&o.undo, now).unwrap();
+        assert!(text("alpha/inner").is_some());
+
+        // a purge has nothing to undo
+        apply("delete alpha", now, &here).unwrap();
+        assert!(apply("purge alpha", now, &here).unwrap().undo.is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+}
