@@ -4,5 +4,7 @@ mod format;
 mod store;
 mod reference;
 mod chat;
+mod command;
+mod grammar;
 
 fn main() {}
