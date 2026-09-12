@@ -17,9 +17,11 @@ A terminal outliner for the open loops in your work. Every thread is a folder un
 
 ## Build
 
+Needs a Rust toolchain. Chats need the `claude` CLI on your PATH, and deadline notifications are macOS only.
+
 ```
 cargo install --path .      puts `t0` in ~/.cargo/bin
-t0                        the tree
+t0                          the tree
 ```
 
 ## Keys
@@ -52,9 +54,9 @@ The app opens on its wordmark, which resolves out of static and rolls up into th
 
 Typing happens on one line: prompts open at the bottom, the filter at the top. `ctrl+w` and `ctrl+u` rub out. A command that fails keeps what you typed so you can fix it. The box beside a title is empty until the thread is closed, half-filled once you have done something about it, and filled when it is done. Its colour is white for your move, amber while you are on it, blue while waiting, red past a deadline, grey when closed. A folder takes the loudest state of anything inside it, so a parent cannot look calm while a sub-thread is overdue.
 
-## One grammar, three doors
+## One grammar, two doors
 
-The keys, the CLI and the `/thread` skill all build the same lines:
+The keys and the CLI build the same lines, so anything you can do in the app you can do from a shell, a script, or a Claude Code chat:
 
 ```
 new <title>[: <problem>[, wait [1d]]]
@@ -103,10 +105,10 @@ Nothing leaves `~/.t0` until you purge it. `x` moves a thread and everything ins
 
 ## Layout
 
-- `store.rs` reads and writes the folders. `format.rs` is the `thread.md` format, hand-editable and forgiving: a line it cannot read stays as notes.
-- `command.rs` is the grammar, reference resolution, timers and the status text.
-- `model.rs` holds the tree and the status rules. `duration.rs` parses and prints spans.
-- `app.rs` is the state and every key. `ui.rs` draws. `input.rs` is the one text field.
-- `chat.rs` writes chat files and builds the `claude` command; `main.rs` owns the terminal handoff.
+- `store.rs` reads and writes the folders, the archive and the trash. `format.rs` is the `thread.md` format, hand-editable and forgiving: a line it cannot read stays as notes.
+- `model.rs` holds the tree and the status rules. `duration.rs` parses and prints spans. `reference.rs` turns what you typed into the thread you meant.
+- `grammar.rs` parses a line into a command. `command.rs` runs it, and records how to undo it.
+- `app.rs` is the state, `rows.rs` flattens the tree into what is on screen, `keys.rs` maps each keypress, `ui.rs` draws, `intro.rs` is the banner. `input.rs` is the one text field.
+- `config.rs` reads `~/.t0/config`. `chat.rs` writes chat files and builds the `claude` command. `main.rs` runs the loop and owns the terminal handoff.
 
-`T0_ROOT` points the whole thing at another folder, which is how the tests run.
+`T0_ROOT` points the whole thing at another folder, which is how the test runs.
