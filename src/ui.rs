@@ -14,7 +14,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const HINT: &str = "n new  a event  w wait  d done  c chat  v view  x archive  X delete  u undo  A T bins  ? keys";
+const HINT: &str = "n new  a event  w wait  d done  c chat  v view  x archive  X delete  u undo  ? keys";
 
 /// Columns on screen, not bytes or characters: a CJK title is twice as wide.
 pub fn width(s: &str) -> usize {

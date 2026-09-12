@@ -2,6 +2,8 @@
 
 Your life, as threads. One folder per thing you are on the hook for, one line per thing that happened, and a tree that shows where every loop stands.
 
+![t0 opening on a tree of threads](docs/t0.gif)
+
 ```
 blog-post                      closed   just now    published
 hiring                         waiting  in 7d       mailed two candidates
