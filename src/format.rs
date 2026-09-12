@@ -9,9 +9,9 @@ use chrono::{DateTime, Local};
 ///
 ///     # aws
 ///
-///     - 2026-09-05T09:10:00+05:30 t0 EBS throttling on prod db
-///     - 2026-09-06T11:00:00+05:30 action mailed vijay
-///     - 2026-09-06T11:00:00+05:30 wait 1d | due=2026-09-07T11:00:00+05:30 fired=2026-09-07T11:00:03+05:30
+///     - 2026-09-05T09:10:00+00:00 t0 EBS throttling on prod db
+///     - 2026-09-06T11:00:00+00:00 action mailed vijay
+///     - 2026-09-06T11:00:00+00:00 wait 1d | due=2026-09-07T11:00:00+00:00 fired=2026-09-07T11:00:03+00:00
 ///
 ///     anything else is notes and is kept as written
 pub struct ThreadFile {
