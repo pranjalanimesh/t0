@@ -1,6 +1,31 @@
 # t0
 
-A terminal outliner for the open loops in your work. Every thread is a folder under `~/.t0`, sub-threads are sub-folders, as deep as you like. Each folder holds a plain-text log and the Claude Code chats you started from it.
+Your life, as threads. One folder per thing you are on the hook for, one line per thing that happened, and a tree that shows where every loop stands.
+
+```
+blog-post                      closed   just now    published
+hiring                         waiting  in 7d       mailed two candidates
+infra                          yours    just now    keep the lights on
+  aws                          waiting  in 2d       asked vijay for the quota bump
+  dns                          doing    just now    drafted the plan
+tax-return                     waiting  in 3d       accountant has the docs
+```
+
+## Why
+
+Most of what you carry is not a task. It is an open loop: the vendor who owes you a reply, the migration you started on Tuesday and have not touched since, the hire you are waiting on, the tax return your accountant has. A todo list flattens all of that into checkboxes. A notes app buries it in pages. Chat scrolls it away.
+
+t0 gives each loop a thread. A thread has a title, a log of what happened, and sub-threads as deep as the work goes. Every line in the log is one of four things: the problem, something you did, a wait on someone else, or done. From those four the tree works out, for every thread, whose move it is.
+
+So the tree answers the only questions that matter, at a glance:
+
+- **What is my move.** A white box. Nobody else is going to do it.
+- **What am I waiting on, and until when.** Blue, with the deadline. Red the moment it passes.
+- **What is done.** Filled in, greyed out, gone from the current view.
+
+A thread you stop touching goes cold after three weeks and leaves the view on its own. Nothing is deleted, nothing nags, nothing needs sorting. The signal is what is moving. The noise files itself.
+
+It is all plain text. Every thread is a folder under `~/.t0` with a `thread.md` you can open in any editor, grep, back up, or commit. Start a Claude Code chat from a thread and it begins inside that folder, so it reads the log before it says a word.
 
 ```
 ~/.t0/
