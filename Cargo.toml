@@ -2,6 +2,9 @@
 name = "t0"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "Your brain is a bad place to keep open loops."
+repository = "https://github.com/pranjalanimesh/t0"
 
 [dependencies]
 anyhow = "1"

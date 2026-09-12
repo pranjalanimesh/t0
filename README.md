@@ -113,3 +113,7 @@ Nothing leaves `~/.t0` until you purge it. `x` moves a thread and everything ins
 - `config.rs` reads `~/.t0/config`. `chat.rs` writes chat files and builds the `claude` command. `main.rs` runs the loop and owns the terminal handoff.
 
 `T0_ROOT` points the whole thing at another folder, which is how the test runs.
+
+## License
+
+MIT. See [CONTRIBUTING.md](CONTRIBUTING.md) if you want to change something.
