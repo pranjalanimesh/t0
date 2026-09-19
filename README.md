@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.svg" alt="t0" width="144"></p>
+
 # t0
 
 Your brain is a bad place to keep open loops.
